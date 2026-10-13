@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  web:
+    build: .
+    container_name: crowdpulse_tn_app
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PROJECT_NAME=CrowdPulse TN
+      - ENVIRONMENT=production
+      - DATABASE_URL=sqlite:///./crowdpulse.db
+      - SECRET_KEY=production_secret_key_generate_safe_uuid_here_2026
+    volumes:
+      - ./frontend/uploads:/app/frontend/uploads
+      - ./crowdpulse.db:/app/crowdpulse.db
+
+  # Optional PostgreSQL / PostGIS container for production deployments:
+  # db:
+  #   image: postgis/postgis:15-3.3
+  #   container_name: crowdpulse_tn_db
+  #   restart: unless-stopped
+  #   environment:
+  #     POSTGRES_USER: crowd_user
+  #     POSTGRES_PASSWORD: crowd_password
+  #     POSTGRES_DB: crowdpulse_tn
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #
+  # volumes:
+  #   pgdata:

@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40" fill="none">
+  <rect width="40" height="40" rx="10" fill="#14243A"/>
+  <!-- Location Pin -->
+  <path d="M20 7C15.58 7 12 10.58 12 15C12 20.25 20 29 20 29C20 29 28 20.25 28 15C28 10.58 24.42 7 20 7Z" stroke="#0F9D8A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- Inner Pulse Circle -->
+  <circle cx="20" cy="15" r="3.2" fill="#0F9D8A"/>
+  <!-- Dynamic Pulse Waveform Overlay -->
+  <path d="M7 23H13L16 19L19 27L22 21L25 25L28 23H33" stroke="#F2B544" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
