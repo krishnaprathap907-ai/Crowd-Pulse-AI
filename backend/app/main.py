@@ -1,5 +1,13 @@
 import os
+import sys
+from pathlib import Path
 from contextlib import asynccontextmanager
+
+# Ensure repository root is on sys.path for serverless environments
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -15,8 +23,15 @@ from backend.app.api import (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Ensure database tables exist
-    Base.metadata.create_all(bind=engine)
-    os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"Database init notice: {e}")
+
+    try:
+        os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
+    except Exception as e:
+        print(f"Upload dir notice: {e}")
     
     # Auto-seed if database is new
     try:
@@ -61,11 +76,16 @@ frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..
 static_dir = os.path.join(frontend_dir, "static")
 uploads_dir = os.path.join(frontend_dir, "uploads")
 
-os.makedirs(static_dir, exist_ok=True)
-os.makedirs(uploads_dir, exist_ok=True)
+try:
+    os.makedirs(static_dir, exist_ok=True)
+    os.makedirs(uploads_dir, exist_ok=True)
+except Exception:
+    pass
 
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
-app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+if os.path.exists(uploads_dir):
+    app.mount("/uploads", StaticFiles(directory=uploads_dir), name="uploads")
 
 @app.get("/health")
 def health_check():
