@@ -9,7 +9,7 @@ from backend.app.core.config import settings
 from backend.app.core.database import Base, engine
 from backend.app.api import (
     auth, reports, incidents, analytics, map as map_api,
-    notifications, admin, demo
+    notifications, admin, demo, copilot, radar, resolutions, governance
 )
 
 @asynccontextmanager
@@ -51,6 +51,10 @@ app.include_router(map_api.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(admin.router, prefix="/api")
 app.include_router(demo.router, prefix="/api")
+app.include_router(copilot.router, prefix="/api")
+app.include_router(radar.router, prefix="/api")
+app.include_router(resolutions.router, prefix="/api")
+app.include_router(governance.router, prefix="/api")
 
 # Static files
 frontend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "frontend"))

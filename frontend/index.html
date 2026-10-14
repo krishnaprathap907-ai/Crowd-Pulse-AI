@@ -16,16 +16,20 @@
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
 
   <!-- CrowdPulse TN Design System -->
-  <link rel="stylesheet" href="/static/css/styles.css">
+  <link rel="stylesheet" href="/static/css/styles.css?v=2.4">
 </head>
 <body>
   <!-- Root App Shell -->
   <div id="app"></div>
 
+  <!-- Global Modal & Toast Roots (Direct body children to prevent z-index/overflow traps) -->
+  <div id="modal-root"></div>
+  <div id="toast-container" class="toast-container"></div>
+
   <!-- Leaflet JS -->
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
 
   <!-- Application Engine -->
-  <script src="/static/js/app.js"></script>
+  <script src="/static/js/app.js?v=2.4"></script>
 </body>
 </html>

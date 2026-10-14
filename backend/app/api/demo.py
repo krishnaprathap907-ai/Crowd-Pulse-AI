@@ -10,11 +10,16 @@ from backend.app.geo.detector import detector
 
 router = APIRouter(prefix="/demo", tags=["Demonstration"])
 
-@router.post("/seed")
+@router.api_route("/seed", methods=["GET", "POST"])
 def seed_demo_data(db: Session = Depends(get_db)):
     """
     Seeds realistic demonstration accounts and scenario records.
     """
+    try:
+        import scripts.copy_assets
+    except Exception as e:
+        print(f"Copy assets notice: {e}")
+
     from scripts.seed_demo import run_seed
     try:
         run_seed()

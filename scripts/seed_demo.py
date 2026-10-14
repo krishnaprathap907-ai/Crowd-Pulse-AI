@@ -10,12 +10,33 @@ from backend.app.core.security import get_password_hash
 from backend.app.models.models import (
     User, UserProfile, Department, CivicCategory, Report, ReportAnalysis,
     Incident, IncidentReport, StatusHistory, Notification, AlertEvent,
-    ApplicationSetting, UserRole, IncidentStatus, PriorityLevel
+    ApplicationSetting, UserRole, IncidentStatus, PriorityLevel,
+    EmergingRiskForecast, IncidentResolutionEvidence, ModelVersion, AIGovernanceMetric, SpamSignalLog
 )
+
+def migrate_sqlite_columns(engine):
+    from sqlalchemy import inspect, text
+    try:
+        inspector = inspect(engine)
+        with engine.connect() as conn:
+            for table_name, table in Base.metadata.tables.items():
+                if inspector.has_table(table_name):
+                    existing_cols = {col["name"] for col in inspector.get_columns(table_name)}
+                    for col in table.columns:
+                        if col.name not in existing_cols:
+                            col_type = col.type.compile(engine.dialect)
+                            try:
+                                conn.execute(text(f"ALTER TABLE {table_name} ADD COLUMN {col.name} {col_type}"))
+                                conn.commit()
+                            except Exception as ex:
+                                pass
+    except Exception as e:
+        print(f"Migration helper notice: {e}")
 
 def run_seed():
     print("Creating all tables...")
     Base.metadata.create_all(bind=engine)
+    migrate_sqlite_columns(engine)
     db = SessionLocal()
 
     try:
@@ -368,8 +389,153 @@ def run_seed():
             db.flush()
             db.add(IncidentReport(incident_id=waste_inc.id, report_id=waste_rep.id))
 
+        # Ensure Resolution Evidence & Photos exist
+        img_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "frontend", "static", "images"))
+        os.makedirs(img_dir, exist_ok=True)
+        artifact_dir = r"C:\Users\krishnaprathap\.gemini\antigravity-ide\brain\ac9485ad-251f-48c4-a003-bfd56afe2200"
+        for f in ["velachery_before_1791897865108.jpg", "velachery_after_1791897887624.jpg"]:
+            src = os.path.join(artifact_dir, f)
+            if os.path.exists(src):
+                dest_name = "velachery_before.jpg" if "before" in f else "velachery_after.jpg"
+                try:
+                    shutil.copy2(src, os.path.join(img_dir, dest_name))
+                except Exception:
+                    pass
+
+        if db.query(IncidentResolutionEvidence).count() == 0:
+            resolved_inc = db.query(Incident).filter(Incident.status.in_([IncidentStatus.CLOSED, IncidentStatus.RESOLVED])).first()
+            if not resolved_inc:
+                resolved_inc = db.query(Incident).first()
+            if resolved_inc:
+                officer = db.query(User).filter(User.role == UserRole.AUTHORITY).first()
+                db.add(IncidentResolutionEvidence(
+                    incident_id=resolved_inc.id,
+                    submitted_by_user_id=officer.id if officer else 1,
+                    before_image_url="/static/images/velachery_before.jpg",
+                    after_image_url="/static/images/velachery_after.jpg",
+                    work_completion_notes="GCC SWM deployed mechanical compactor truck #TN-01-GCC-4412. 4.2 tonnes of accumulated commercial waste removed. Area sanitized with lime and bleaching powder.",
+                    citizen_confirmation_rating=5,
+                    citizen_feedback_text="Thank you Greater Chennai Corporation! Waste was cleared within 4 hours of notification.",
+                    created_at=now - timedelta(hours=22)
+                ))
+                db.commit()
+
+        # 4. Seed Emerging Risk Forecasts (Radar)
+        if db.query(EmergingRiskForecast).count() == 0:
+            radar_seeds = [
+                {
+                    "area": "T. Nagar - Ward 117 (South Boag & Usman Rd)",
+                    "district": "Chennai",
+                    "cat_id": 4, # Flooding & Drainage
+                    "risk": PriorityLevel.CRITICAL,
+                    "curr": 8, "base": 2.1, "growth": 280.9, "conf": 0.94,
+                    "rec": "Preemptively position 100 HP mobile dewatering pumps at Usman Road subway and inspect inlet culverts before evening downpour."
+                },
+                {
+                    "area": "Velachery Bypass & Lake Corridor",
+                    "district": "Chennai",
+                    "cat_id": 4, # Sewage & Drainage
+                    "risk": PriorityLevel.HIGH,
+                    "curr": 6, "base": 2.2, "growth": 172.7, "conf": 0.89,
+                    "rec": "Dispatch CMWSSB super-sucker jetting machine to clear trunk sewer blockage along 100 Feet Road junction."
+                },
+                {
+                    "area": "OMR - Sholinganallur Junction",
+                    "district": "Chennai",
+                    "cat_id": 1, # Water Supply
+                    "risk": PriorityLevel.HIGH,
+                    "curr": 5, "base": 2.0, "growth": 150.0, "conf": 0.88,
+                    "rec": "Inspect main distribution valve chamber; dispatch emergency CMWSSB drinking water tankers to affected residential layouts."
+                },
+                {
+                    "area": "Anna Nagar 2nd Avenue Roundtana",
+                    "district": "Chennai",
+                    "cat_id": 2, # Roads & Footpaths
+                    "risk": PriorityLevel.MEDIUM,
+                    "curr": 4, "base": 2.5, "growth": 60.0, "conf": 0.82,
+                    "rec": "Deploy GCC cold-mix asphalt patch truck during off-peak hours (11 PM - 5 AM) with high-visibility safety barriers."
+                },
+                {
+                    "area": "Periyar Bus Stand Corridor",
+                    "district": "Madurai",
+                    "cat_id": 3, # Waste Management
+                    "risk": PriorityLevel.MEDIUM,
+                    "curr": 3, "base": 2.0, "growth": 50.0, "conf": 0.78,
+                    "rec": "Direct Madurai City Municipal Corporation sanitation squads to increase collection frequency to twice daily around commercial stalls."
+                },
+                {
+                    "area": "RS Puram West",
+                    "district": "Coimbatore",
+                    "cat_id": 5, # Streetlights
+                    "risk": PriorityLevel.LOW,
+                    "curr": 2, "base": 1.8, "growth": 11.1, "conf": 0.75,
+                    "rec": "Routine inspection by TANGEDCO area maintenance crew scheduled during regular Friday maintenance run."
+                }
+            ]
+            for r in radar_seeds:
+                db.add(EmergingRiskForecast(
+                    geographic_area=r["area"],
+                    district=r["district"],
+                    category_id=r["cat_id"],
+                    risk_level=r["risk"],
+                    current_volume=r["curr"],
+                    baseline_volume=r["base"],
+                    growth_rate_pct=r["growth"],
+                    confidence=r["conf"],
+                    recommendation=r["rec"],
+                    is_active=True,
+                    created_at=now - timedelta(hours=2)
+                ))
+
+        # 5. Seed Model Versions & Governance Metrics
+        if db.query(ModelVersion).count() == 0:
+            db.add(ModelVersion(model_name="CrowdPulse Tamil-English Civic NLP", version="cp-civic-nlp-v2.5", accuracy_score=0.942, is_active=True, deployed_at=now - timedelta(days=5)))
+            db.add(ModelVersion(model_name="Spatiotemporal DBSCAN Clustering", version="cp-spatiotemporal-dbscan-v2.0", accuracy_score=0.965, is_active=True, deployed_at=now - timedelta(days=12)))
+            db.add(ModelVersion(model_name="Perceptual dHash Duplicate CV", version="cp-perceptual-dhash-cv-v1.8", accuracy_score=0.981, is_active=True, deployed_at=now - timedelta(days=20)))
+
+        if db.query(AIGovernanceMetric).count() == 0:
+            gov_seeds = [
+                ("Multimodal NLP & Tamil Translation", "cp-civic-nlp-v2.5", 14, 0.94, False),
+                ("Entity Extraction & NER", "cp-civic-nlp-v2.5", 8, 0.92, False),
+                ("Perceptual dHash CV", "cp-perceptual-dhash-cv-v1.8", 11, 0.98, False),
+                ("DBSCAN Spatiotemporal Clustering", "cp-spatiotemporal-dbscan-v2.0", 22, 0.95, False),
+                ("Prioritization & SLA Engine", "cp-civic-priority-v2.0", 5, 0.96, False)
+            ]
+            for comp, ver, lat, conf, corr in gov_seeds:
+                db.add(AIGovernanceMetric(
+                    component_name=comp,
+                    model_version=ver,
+                    latency_ms=lat,
+                    confidence_score=conf,
+                    was_human_corrected=corr,
+                    created_at=now - timedelta(hours=1)
+                ))
+
+        # 6. Ensure all existing incidents have smart priority, SLA and match signals
+        all_incs = db.query(Incident).all()
+        for inc in all_incs:
+            if not inc.priority_score or inc.priority_score == 50.0:
+                p_map = {"critical": 92.0, "high": 78.5, "medium": 52.0, "low": 28.0}
+                inc.priority_score = p_map.get(inc.priority.lower(), 55.0)
+                sla_hrs = {"critical": 4, "high": 12, "medium": 24, "low": 48}.get(inc.priority.lower(), 24)
+                inc.sla_due_date = inc.created_at + timedelta(hours=sla_hrs)
+                inc.priority_breakdown = {
+                    "hazard_factor": round(inc.priority_score * 0.35, 1),
+                    "velocity_factor": round(inc.priority_score * 0.25, 1),
+                    "sensitivity_factor": round(inc.priority_score * 0.20, 1),
+                    "ai_severity_factor": round(inc.priority_score * 0.15, 1),
+                    "sla_urgency_factor": round(inc.priority_score * 0.05, 1)
+                }
+                inc.match_signals_breakdown = {
+                    "overall_match_score": 0.88,
+                    "spatial_proximity_score": 0.92,
+                    "semantic_text_score": 0.85,
+                    "temporal_proximity_score": 0.90,
+                    "visual_similarity_score": 0.75
+                }
+
         db.commit()
-        print("Demo dataset seeded successfully!")
+        print("Demo dataset and advanced AI telemetry seeded successfully!")
         return True
     except Exception as e:
         db.rollback()

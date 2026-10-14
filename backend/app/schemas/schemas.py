@@ -13,8 +13,17 @@ class UserRegister(BaseModel):
     preferred_language: Optional[str] = "en"
 
 class UserLogin(BaseModel):
-    email: str
+    email: Optional[str] = None
+    username: Optional[str] = None
     password: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ForgotPasswordReset(BaseModel):
+    email: str
+    otp: str
+    new_password: str
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -89,6 +98,13 @@ class ReportAnalysisOut(BaseModel):
     audio_transcription: Optional[str] = None
     image_labels: Optional[Any] = None
     processing_status: str
+    english_translation: Optional[str] = None
+    summary: Optional[str] = None
+    entities_extracted: Optional[Any] = None
+    pii_flagged: Optional[bool] = False
+    pii_redacted_text: Optional[str] = None
+    severity_score: Optional[float] = 0.5
+    image_perceptual_hash: Optional[str] = None
 
     class Config:
         from_attributes = True
@@ -142,6 +158,12 @@ class ReportDetailOut(ReportOut):
     incident_id: Optional[int] = None
     incident_status: Optional[str] = None
     status_history: List[Dict[str, Any]] = []
+    assigned_department_name: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    resolution_notes: Optional[str] = None
+    resolution_evidence_url: Optional[str] = None
+    public_update: Optional[str] = None
+    sla_due_date: Optional[datetime] = None
 
 # Incident
 class IncidentOut(BaseModel):
@@ -160,6 +182,9 @@ class IncidentOut(BaseModel):
     radius_meters: float
     status: str
     priority: str
+    priority_score: Optional[float] = 50.0
+    sla_due_date: Optional[datetime] = None
+    is_overdue: Optional[bool] = False
     report_count: int
     unique_reporter_count: int
     first_reported_at: datetime
@@ -167,6 +192,7 @@ class IncidentOut(BaseModel):
     assigned_department_id: Optional[int] = None
     assigned_department_name: Optional[str] = None
     assigned_staff_name: Optional[str] = None
+    resolution_evidence_url: Optional[str] = None
     is_demo: bool = False
     created_at: datetime
 
@@ -176,6 +202,8 @@ class IncidentOut(BaseModel):
 class IncidentDetailOut(IncidentOut):
     detection_reason: str
     evidence_summary: Dict[str, Any]
+    priority_breakdown: Optional[Dict[str, Any]] = None
+    match_signals_breakdown: Optional[Dict[str, Any]] = None
     public_update: Optional[str] = None
     internal_notes: Optional[str] = None
     resolution_notes: Optional[str] = None

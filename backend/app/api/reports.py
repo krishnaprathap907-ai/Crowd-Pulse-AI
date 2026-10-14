@@ -17,6 +17,8 @@ from backend.app.api.deps import get_current_user_optional, get_current_user, re
 from backend.app.ai.normalizer import normalize_text
 from backend.app.ai.classifier import classifier
 from backend.app.ai.multimodal import multimodal_adapter
+from backend.app.ai.multimodal_advanced import advanced_ai
+from backend.app.services.anti_spam_service import AntiSpamService
 from backend.app.geo.detector import detector
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
@@ -60,7 +62,7 @@ async def create_report(
 
     new_report = Report(
         reference_no=ref_no,
-        citizen_id=current_user.id if (current_user and not is_anonymous) else None,
+        citizen_id=current_user.id if current_user else None,
         title=title.strip(),
         description=description.strip(),
         category_id=category_id,
@@ -79,7 +81,8 @@ async def create_report(
     db.add(new_report)
     db.flush()
 
-    # Step 1: AI Normalization & Classification
+    # Step 1: AI Normalization & Advanced Multimodal Intelligence
+    adv_text = advanced_ai.process_text_intelligence(title, description)
     norm_text, lang = normalize_text(f"{title} {description}")
     ai_result = classifier.classify(norm_text, user_selected_category_id=category_id)
 
@@ -87,6 +90,7 @@ async def create_report(
     os.makedirs(settings.UPLOAD_DIR, exist_ok=True)
     audio_transcription = None
     image_labels = None
+    img_perceptual_hash = None
 
     if image and image.filename:
         safe_img_name = f"{ref_no}_{uuid.uuid4().hex[:8]}_{os.path.basename(image.filename)}"
@@ -104,9 +108,10 @@ async def create_report(
             exif_stripped=True
         ))
 
-        # Vision adapter
+        # Vision adapter & perceptual dHash
         vision_res = multimodal_adapter.analyze_image(img_dest, category.slug)
         image_labels = vision_res.get("labels")
+        img_perceptual_hash, _ = advanced_ai.compute_image_perceptual_hash(img_dest)
 
     if audio and audio.filename:
         safe_audio_name = f"{ref_no}_{uuid.uuid4().hex[:8]}_{os.path.basename(audio.filename)}"
@@ -132,14 +137,30 @@ async def create_report(
             norm_text, _ = normalize_text(f"{title} {description} {audio_transcription}")
             ai_result = classifier.classify(norm_text, user_selected_category_id=category_id)
 
-    # Save Report Analysis record
+    # Anti-Spam & Trust Score Verification
+    AntiSpamService.evaluate_report(
+        db=db,
+        report_id=new_report.id,
+        user_id=current_user.id if current_user else None,
+        description=description,
+        image_perceptual_hash=img_perceptual_hash
+    )
+
+    # Save Report Analysis record with advanced civic metadata
     analysis_record = ReportAnalysis(
         report_id=new_report.id,
         normalized_text=norm_text,
-        language_detected=lang,
+        language_detected=adv_text.get("language", lang),
+        english_translation=adv_text.get("english_translation"),
+        summary=adv_text.get("summary"),
+        entities_extracted=adv_text.get("entities"),
+        pii_flagged=adv_text.get("pii_flagged", False),
+        pii_redacted_text=adv_text.get("pii_redacted_text"),
+        severity_score=adv_text.get("severity_score", 0.5),
+        image_perceptual_hash=img_perceptual_hash,
         predicted_category_id=ai_result.get("predicted_category_id"),
         confidence_score=ai_result.get("confidence_score", 0.8),
-        model_version=ai_result.get("model_version", "cp-civic-nlp-v2.1"),
+        model_version=adv_text.get("model_version", "cp-civic-nlp-v2.5"),
         audio_transcription=audio_transcription,
         image_labels=image_labels,
         processing_status="completed",
@@ -272,6 +293,20 @@ def list_my_reports(
         ))
     return result
 
+@router.get("/track/{ref_no}", response_model=ReportDetailOut)
+def track_report_by_reference(
+    ref_no: str,
+    current_user: Optional[User] = Depends(get_current_user_optional),
+    db: Session = Depends(get_db)
+):
+    clean_ref = ref_no.strip().lstrip("#")
+    report = db.query(Report).filter(
+        (Report.reference_no.ilike(f"%{clean_ref}%"))
+    ).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Grievance report not found with this tracking reference.")
+    return get_report_detail(report.id, current_user, db)
+
 @router.get("/{id}", response_model=ReportDetailOut)
 def get_report_detail(
     id: int,
@@ -287,9 +322,16 @@ def get_report_detail(
     is_staff = current_user and current_user.role in [UserRole.AUTHORITY, UserRole.ADMIN, UserRole.STAFF]
     
     inc_link = db.query(IncidentReport).filter(IncidentReport.report_id == report.id).first()
-    inc_id = inc_link.incident_id if inc_link else None
-    inc_num = inc_link.incident.incident_number if inc_link else None
-    inc_status = inc_link.incident.status if inc_link else None
+    inc = inc_link.incident if inc_link else None
+    inc_id = inc.id if inc else None
+    inc_num = inc.incident_number if inc else None
+    inc_status = inc.status if inc else None
+    assigned_dept_name = inc.assigned_department.name if (inc and inc.assigned_department) else None
+    resolved_time = inc.resolved_at if (inc and inc.resolved_at) else (report.updated_at if report.status in ["resolved", "closed"] else None)
+    res_notes = inc.resolution_notes if inc else None
+    res_evidence = inc.resolution_evidence_url if inc else None
+    pub_upd = inc.public_update if inc else None
+    sla_due = inc.sla_due_date if inc else None
 
     # Fetch status history
     histories = db.query(StatusHistory).filter(
@@ -307,6 +349,48 @@ def get_report_detail(
         } for h in histories
     ]
 
+    # If no manual history records exist, synthesize workflow stages for live tracking
+    if not status_hist_out:
+        status_hist_out.append({
+            "previous_status": None,
+            "new_status": "submitted",
+            "actor": "Citizen Portal",
+            "notes": "Civic grievance received and geocoded with privacy redaction.",
+            "created_at": report.created_at.isoformat()
+        })
+        if report.analysis:
+            status_hist_out.append({
+                "previous_status": "submitted",
+                "new_status": "analyzed",
+                "actor": f"AI Engine ({report.analysis.model_version})",
+                "notes": f"Categorized as {report.category.name if report.category else 'Civic Issue'} with {round((report.analysis.confidence_score or 0.85)*100)}% confidence.",
+                "created_at": report.created_at.isoformat()
+            })
+        if inc_link:
+            status_hist_out.append({
+                "previous_status": "analyzed",
+                "new_status": "clustered",
+                "actor": "Spatial Clustering Engine",
+                "notes": f"Aggregated into municipal incident cluster #{inc_num} ({inc.geographic_area if inc else 'Locality'}).",
+                "created_at": (inc_link.added_at or report.created_at).isoformat()
+            })
+        if inc and inc.assigned_department:
+            status_hist_out.append({
+                "previous_status": "clustered",
+                "new_status": "assigned",
+                "actor": "Operational Command",
+                "notes": f"Dispatched to {inc.assigned_department.name} for field inspection and maintenance.",
+                "created_at": (inc.created_at or report.created_at).isoformat()
+            })
+        if report.status in ["resolved", "closed"] or (inc and inc.status in ["resolved", "resolved_pending", "closed"]):
+            status_hist_out.append({
+                "previous_status": "in_progress",
+                "new_status": "resolved",
+                "actor": assigned_dept_name or "Municipal Field Team",
+                "notes": res_notes or "Field maintenance verified and civic resolution completed.",
+                "created_at": (resolved_time or report.updated_at).isoformat()
+            })
+
     analysis_out = None
     if report.analysis:
         analysis_out = {
@@ -317,7 +401,14 @@ def get_report_detail(
             "model_version": report.analysis.model_version,
             "audio_transcription": report.analysis.audio_transcription,
             "image_labels": report.analysis.image_labels,
-            "processing_status": report.analysis.processing_status
+            "processing_status": report.analysis.processing_status,
+            "english_translation": report.analysis.english_translation,
+            "summary": report.analysis.summary,
+            "entities_extracted": report.analysis.entities_extracted,
+            "pii_flagged": report.analysis.pii_flagged,
+            "pii_redacted_text": report.analysis.pii_redacted_text,
+            "severity_score": report.analysis.severity_score,
+            "image_perceptual_hash": report.analysis.image_perceptual_hash
         }
 
     attachments_out = [
@@ -356,6 +447,12 @@ def get_report_detail(
         incident_id=inc_id,
         incident_number=inc_num,
         incident_status=inc_status,
+        assigned_department_name=assigned_dept_name,
+        resolved_at=resolved_time,
+        resolution_notes=res_notes,
+        resolution_evidence_url=res_evidence,
+        public_update=pub_upd,
+        sla_due_date=sla_due,
         attachments=attachments_out,
         analysis=analysis_out,
         status_history=status_hist_out

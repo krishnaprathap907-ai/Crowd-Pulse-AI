@@ -25,6 +25,8 @@ def get_current_user_optional(
         return None
     return user
 
+get_optional_current_user = get_current_user_optional
+
 def get_current_user(
     user: Optional[User] = Depends(get_current_user_optional)
 ) -> User:

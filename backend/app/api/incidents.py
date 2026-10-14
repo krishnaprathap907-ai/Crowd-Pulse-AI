@@ -53,9 +53,19 @@ def list_incidents(
 
     incidents = query.order_by(Incident.latest_activity_at.desc()).offset(offset).limit(limit).all()
 
+    now = datetime.now(timezone.utc)
     result = []
     for inc in incidents:
         dept_name = inc.assigned_department.name if inc.assigned_department else None
+        
+        # Check overdue status
+        due = inc.sla_due_date
+        is_overdue = False
+        if due:
+            if due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+            is_overdue = (now > due) and (inc.status not in [IncidentStatus.RESOLVED, IncidentStatus.REJECTED, IncidentStatus.MERGED])
+
         result.append(IncidentOut(
             id=inc.id,
             incident_number=inc.incident_number,
@@ -72,12 +82,16 @@ def list_incidents(
             radius_meters=inc.radius_meters,
             status=inc.status,
             priority=inc.priority,
+            priority_score=inc.priority_score or 50.0,
+            sla_due_date=inc.sla_due_date,
+            is_overdue=is_overdue,
             report_count=inc.report_count,
             unique_reporter_count=inc.unique_reporter_count,
             first_reported_at=inc.first_reported_at,
             latest_activity_at=inc.latest_activity_at,
             assigned_department_id=inc.assigned_department_id,
             assigned_department_name=dept_name,
+            resolution_evidence_url=inc.resolution_evidence_url,
             is_demo=inc.is_demo,
             created_at=inc.created_at
         ))
@@ -135,6 +149,7 @@ def get_incident_detail(
     ]
 
     dept_name = inc.assigned_department.name if inc.assigned_department else None
+    now = datetime.now(timezone.utc)
     
     # Hide internal notes from public citizens
     internal_notes = inc.internal_notes if (current_user and current_user.role != UserRole.CITIZEN) else None
@@ -155,6 +170,11 @@ def get_incident_detail(
         radius_meters=inc.radius_meters,
         status=inc.status,
         priority=inc.priority,
+        priority_score=inc.priority_score or 50.0,
+        sla_due_date=inc.sla_due_date,
+        is_overdue=(now > inc.sla_due_date) if inc.sla_due_date else False,
+        priority_breakdown=inc.priority_breakdown,
+        match_signals_breakdown=inc.match_signals_breakdown,
         report_count=inc.report_count,
         unique_reporter_count=inc.unique_reporter_count,
         first_reported_at=inc.first_reported_at,
@@ -420,3 +440,80 @@ def merge_incident(
 
     db.commit()
     return {"message": f"Successfully merged into {target_inc.incident_number}"}
+
+from pydantic import BaseModel
+from backend.app.services.prioritization_service import PrioritizationService
+
+class PriorityOverridePayload(BaseModel):
+    priority: str # critical, high, medium, low
+    override_reason: str
+
+@router.post("/{id}/priority-override")
+def override_incident_priority(
+    id: int,
+    payload: PriorityOverridePayload,
+    current_user: User = Depends(require_authority),
+    db: Session = Depends(get_db)
+):
+    """
+    Allows authorized civic officials to manually override AI-assigned priority with justification.
+    """
+    inc = db.query(Incident).filter(Incident.id == id).first()
+    if not inc:
+        raise HTTPException(status_code=404, detail="Incident not found")
+
+    old_priority = inc.priority
+    old_score = inc.priority_score
+
+    p_calc = PrioritizationService.calculate_priority(
+        category_name=inc.category.name if inc.category else "Civic Issue",
+        report_count=inc.report_count,
+        unique_reporters=inc.unique_reporter_count,
+        geographic_area=inc.geographic_area,
+        created_at=inc.created_at,
+        manual_override=True,
+        override_band=payload.priority
+    )
+
+    inc.priority = p_calc["priority_band"]
+    inc.priority_score = p_calc["priority_score"]
+    inc.priority_breakdown = p_calc["breakdown"]
+    inc.sla_due_date = p_calc["sla_due_date"]
+    inc.manual_priority_override = True
+    inc.override_reason = payload.override_reason
+
+    # Add Status History
+    db.add(StatusHistory(
+        entity_type="incident",
+        entity_id=inc.id,
+        previous_status=inc.status,
+        new_status=inc.status,
+        changed_by_user_id=current_user.id,
+        actor_name=current_user.full_name,
+        notes=f"Priority manually overridden from {old_priority} to {inc.priority}. Reason: {payload.override_reason}"
+    ))
+
+    # Add Audit Log
+    db.add(AuditLog(
+        user_id=current_user.id,
+        action="PRIORITY_MANUAL_OVERRIDE",
+        entity_type="incident",
+        entity_id=inc.id,
+        details_json={
+            "old_priority": old_priority,
+            "new_priority": inc.priority,
+            "old_score": old_score,
+            "new_score": inc.priority_score,
+            "reason": payload.override_reason
+        }
+    ))
+
+    db.commit()
+    return {
+        "status": "success",
+        "incident_id": inc.id,
+        "priority": inc.priority,
+        "priority_score": inc.priority_score,
+        "sla_due_date": inc.sla_due_date.isoformat() if inc.sla_due_date else None,
+        "message": "Incident priority successfully adjusted by authority."
+    }
