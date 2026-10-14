@@ -31,11 +31,6 @@ package = false
 [tool.setuptools]
 packages = ["backend"]
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["backend*"]
-exclude = ["frontend*", "docs*", "scripts*"]
-
 [tool.vercel]
 entrypoint = "backend.app.main:app"
 
